@@ -2,6 +2,8 @@
     <head>
         <!-- Load Plotly JS from CDN -->
         <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+        <!-- Load 3Dmol.js from CDN -->
+        <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
         <style>
             .loading {
                 display: inline-block;
@@ -80,29 +82,64 @@
                 max-height: 100px;
                 overflow-y: auto;
             }
+            .action-container {
+                text-align: center;
+                margin: 40px 0;
+            }
+            .action-button {
+                display: inline-block;
+                padding: 15px 30px;
+                font-size: 18px;
+                font-weight: bold;
+                color: white;
+                background-color: #2196F3;
+                text-decoration: none;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                transition: background-color 0.3s;
+            }
+            .action-button:hover {
+                background-color: #1976D2;
+            }
+            #pdb-viewer-container {
+                display: flex;
+                justify-content: center;
+                margin: 30px 0;
+            }
+            #pdb-viewer {
+                width: 700px;
+                height: 500px;
+                position: relative;
+                border: 2px solid #2196F3;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            }
         </style>
     </head>
     <body>
         <h1>Analysis Results</h1>
 
-        <h3>PDB Information</h3>
-        <div style="background-color: #e8f4f8; padding: 1em; margin: 1em 0; border-left: 4px solid #2196F3;">
-            <strong>Target selected:</strong> {{ target }}<br>
-            <strong>PDB ID:</strong> {{ pdb_id }}<br>
-            <strong>Title:</strong> {{ pdb_title }}
+        <h2>RNA Target Information</h2>
+        <div id="pdb-viewer-container">
+            <div id="pdb-viewer"></div>
         </div>
-
-        {% if target == "TPP" %}
-        <img src="{{ url_for('static', filename='pdb_2gdi.png') }}" alt="PDB 2GDI Structure" style="max-width: 400px; margin: 20px 0;">
-        {% endif %}
         
+        <div style="background-color: #e8f4f8; padding: 1em; margin: 1em 0; border-left: 4px solid #2196F3; max-width: 700px; margin-left: auto; margin-right: auto;">
+            <strong>RNA Target:</strong> {{ target }}<br>
+            <strong>PDB ID:</strong> {{ pdb_id }}<br>
+            <strong>PDB Title:</strong> {{ pdb_title }}
+        </div>
+        
+        {% if analysis %}
         <div style="background-color: lightgray; padding: 1em; margin: 1em 0;">
             {{ analysis|safe }}
         </div>
+        {% endif %}
         
         
-        <h3>Example Active Hits (up to 10)</h3>
-        <div style="background-color: #f0f0f0; padding: 1em; margin: 1em 0; font-family: monospace;">
+        <h2>Analyze Active Hits</h2>
+        <p>Number of active molecules: {{ num_hits }}</p>
+        <div style="background-color: #f0f0f0; padding: 1em; margin: 1em 0; font-family: monospace; max-height: 300px; overflow-y: auto; border: 1px solid #ccc;">
             {{ examples|safe }}
         </div>
         
@@ -224,7 +261,49 @@
             });
         </script>
         
-        <br>
-        <a href="/">Analyze another target</a>
+        <script>
+            // Initialize 3Dmol.js viewer for PDB structure
+            let pdbViewer;
+            
+            function initPDBViewer() {
+                pdbViewer = $3Dmol.createViewer("pdb-viewer", {
+                    backgroundColor: "white",
+                    ui: true  // Enable UI controls
+                });
+            }
+            
+            function loadPDBStructure() {
+                const pdbId = "{{ pdb_id }}";
+                
+                if (!pdbId) return;
+                
+                // Clear previous structure
+                pdbViewer.clear();
+                
+                // Load from RCSB by PDB ID
+                $3Dmol.download(`pdb:${pdbId}`, pdbViewer, {}, function () {
+                    // Add a cartoon representation with spectrum coloring
+                    pdbViewer.setStyle({}, { cartoon: { color: "spectrum" } });
+                    
+                    // Zoom to fit the structure
+                    pdbViewer.zoomTo();
+                    
+                    // Enable spinning animation around y-axis at speed 2
+                    pdbViewer.spin('y', 2);
+                    
+                    pdbViewer.render();
+                });
+            }
+            
+            // Initialize and load PDB structure when page loads
+            window.addEventListener('DOMContentLoaded', function() {
+                initPDBViewer();
+                loadPDBStructure();
+            });
+        </script>
+        
+        <div class="action-container">
+            <a href="/" class="action-button">Analyze another target</a>
+        </div>
     </body>
 </html>

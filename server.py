@@ -185,13 +185,14 @@ def analyze():
     
     # Check if target is valid
     valid_targets = ["TPP", "Glutamine_RS", "ZTP", "SAM_ll", "PreQ1"]
+    num_hits = 0
     if target not in valid_targets:
         result = f"Invalid target. Please choose from: {', '.join(valid_targets)}"
     else:
         # Count active molecules (where target column equals 1)
         num_hits = (df[target] == 1).sum()
         pdb_id = pdb_ids[target]
-        result = f"Number of active molecules (hits) for {target}: {num_hits}"
+        result = ""
         
         # Fetch PDB title from RCSB API
         pdb_title = "Title not available"
@@ -204,12 +205,12 @@ def analyze():
         except Exception as e:
             pdb_title = f"Error fetching title: {str(e)}"
         
-        # Get example active molecules (up to 10)
-        active_molecules = df[df[target] == 1]["Smile"].head(10).tolist()
+        # Get all active molecules
+        active_molecules = df[df[target] == 1]["Smile"].tolist()
         examples = "<br>".join(active_molecules) if active_molecules else "No active molecules found"
     
     return render_template("analyze.html", analysis=result, target=target, examples=examples, 
-                         pdb_id=pdb_id, pdb_title=pdb_title)
+                         pdb_id=pdb_id, pdb_title=pdb_title, num_hits=num_hits)
 
 
 @app.route("/regenerate_umap/<target>")
