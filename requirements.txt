@@ -1,8 +1,8 @@
 flask
 pandas
 requests
-chemplot
 rdkit
-bokeh
 pillow
+umap-learn
+plotly
 

@@ -1,7 +1,7 @@
 <html>
     <head>
-        <!-- Load Bokeh JS from CDN -->
-        <script src="https://cdn.bokeh.org/bokeh/release/bokeh-2.4.3.min.js" crossorigin="anonymous"></script>
+        <!-- Load Plotly JS from CDN -->
+        <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
         <style>
             .loading {
                 display: inline-block;
@@ -16,6 +16,69 @@
                 background-color: #ffebee;
                 border-left: 4px solid #d32f2f;
                 margin: 10px 0;
+            }
+            .visualization-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 20px;
+                align-items: flex-start;
+            }
+            .plot-area {
+                flex: 1;
+                min-width: 600px;
+            }
+            .info-panel {
+                width: 300px;
+                background: #f8f9fa;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 15px;
+                position: sticky;
+                top: 20px;
+                min-height: 300px;
+            }
+            .info-placeholder {
+                color: #666;
+                text-align: center;
+                padding-top: 100px;
+                font-style: italic;
+            }
+            .molecule-detail {
+                display: none;
+            }
+            .molecule-detail img {
+                width: 100%;
+                height: auto;
+                border: 1px solid #eee;
+                background: white;
+                border-radius: 4px;
+                margin: 10px 0;
+            }
+            .molecule-detail .name {
+                font-weight: bold;
+                font-size: 16px;
+                margin-bottom: 10px;
+                color: #2196F3;
+                word-break: break-word;
+            }
+            .molecule-detail .property {
+                margin-bottom: 8px;
+                font-size: 13px;
+            }
+            .molecule-detail .label {
+                font-weight: bold;
+                color: #555;
+            }
+            .molecule-detail .smiles {
+                font-family: monospace;
+                font-size: 11px;
+                background: white;
+                padding: 5px;
+                border: 1px solid #eee;
+                border-radius: 4px;
+                word-break: break-all;
+                max-height: 100px;
+                overflow-y: auto;
             }
         </style>
     </head>
@@ -45,14 +108,49 @@
         
         <h3>Chemical Space Visualization (UMAP)</h3>
         <p style="color: #666; font-size: 14px; margin: 10px 0;">
-            <strong>✨ Interactive Features:</strong> Hover over any point to see the molecule structure. Use mouse to pan and zoom.
+            <strong>✨ Interactive Features:</strong> Hover over any point to see the molecule information in the panel to the right. Click and drag to pan, scroll to zoom.
         </p>
+        
         <div id="loading" class="loading">Loading UMAP visualization with molecule structures... This may take a few moments.</div>
         <div id="error-message" class="error" style="display: none;"></div>
-        <div id="umap-plot" style="width: 100%; max-width: 100%; margin: 20px 0;"></div>
+        
+        <div class="visualization-container">
+            <div class="plot-area">
+                <div id="umap-plot" style="width: 100%; height: 600px;"></div>
+            </div>
+            <div class="info-panel">
+                <div id="info-placeholder" class="info-placeholder">
+                    Hover over a point on the plot<br>to see molecule details
+                </div>
+                <div id="molecule-detail" class="molecule-detail">
+                    <div id="mol-name" class="name"></div>
+                    <img id="mol-img" src="" alt="Molecule Structure">
+                    <div class="property">
+                        <span class="label">Coordinates:</span><br>
+                        UMAP-1: <span id="mol-x"></span><br>
+                        UMAP-2: <span id="mol-y"></span>
+                    </div>
+                    <div class="property">
+                        <span class="label">SMILES:</span>
+                        <div id="mol-smiles" class="smiles"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
         
         <script>
-            // Fetch UMAP plot components (Bokeh)
+            let moleculeData = null;
+            const detailPanel = document.getElementById('molecule-detail');
+            const placeholder = document.getElementById('info-placeholder');
+            
+            // UI Elements
+            const molName = document.getElementById('mol-name');
+            const molImg = document.getElementById('mol-img');
+            const molX = document.getElementById('mol-x');
+            const molY = document.getElementById('mol-y');
+            const molSmiles = document.getElementById('mol-smiles');
+            
+            // Fetch UMAP plot components (Plotly)
             fetch('/umap_plot', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -70,14 +168,52 @@
                 // Hide loading message
                 document.getElementById('loading').style.display = 'none';
                 
-                // Inject the Bokeh div
-                const plotContainer = document.getElementById('umap-plot');
-                plotContainer.innerHTML = data.div;
+                // Store molecule data
+                moleculeData = {
+                    images: data.images,
+                    names: data.names,
+                    smiles: data.smiles,
+                    // Extract coordinates from plot data for easy access
+                    x: data.plot_data.data[0].x,
+                    y: data.plot_data.data[0].y
+                };
                 
-                // Execute the Bokeh script
-                const scriptElement = document.createElement('script');
-                scriptElement.innerHTML = data.script;
-                document.body.appendChild(scriptElement);
+                // Create the Plotly plot using the JSON data
+                const plotDiv = document.getElementById('umap-plot');
+                
+                // Adjust layout for embedded view
+                const layout = data.plot_data.layout;
+                layout.width = null; // Let it be responsive
+                layout.height = 600;
+                layout.margin = {l: 50, r: 20, t: 50, b: 50};
+                
+                Plotly.newPlot('umap-plot', data.plot_data.data, layout, {
+                    displayModeBar: true, 
+                    displaylogo: false,
+                    responsive: true
+                });
+                
+                // Add event listener for hover to show molecule structure
+                plotDiv.on('plotly_hover', function(eventData) {
+                    const pointIndex = eventData.points[0].pointIndex;
+                    
+                    // Update details
+                    molName.textContent = moleculeData.names[pointIndex];
+                    molImg.src = moleculeData.images[pointIndex];
+                    molX.textContent = moleculeData.x[pointIndex].toFixed(2);
+                    molY.textContent = moleculeData.y[pointIndex].toFixed(2);
+                    molSmiles.textContent = moleculeData.smiles[pointIndex];
+                    
+                    // Show details, hide placeholder
+                    placeholder.style.display = 'none';
+                    detailPanel.style.display = 'block';
+                });
+                
+                // Optional: Clear on unhover, or keep last selected
+                // plotDiv.on('plotly_unhover', function() {
+                //    placeholder.style.display = 'block';
+                //    detailPanel.style.display = 'none';
+                // });
             })
             .catch(error => {
                 // Hide loading message and show error

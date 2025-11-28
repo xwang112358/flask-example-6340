@@ -5,9 +5,12 @@ import json
 import os
 from pathlib import Path
 from rdkit import Chem
-from rdkit.Chem import Draw
+from rdkit.Chem import Draw, AllChem
 import base64
 from io import BytesIO
+import numpy as np
+import umap
+import plotly.graph_objects as go
 
 app = Flask(__name__)
 
@@ -33,6 +36,18 @@ def smiles_to_image_base64(smiles, size=(200, 200)):
         print(f"Error generating image for SMILES {smiles}: {e}")
         return None
 
+def smiles_to_fingerprint(smiles, radius=2, nBits=2048):
+    """Convert SMILES to Morgan fingerprint."""
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nBits)
+        return np.array(fp)
+    except Exception as e:
+        print(f"Error generating fingerprint for SMILES {smiles}: {e}")
+        return None
+
 def compute_and_cache_umap(target):
     """Compute UMAP embeddings for a target and cache to disk."""
     print(f"Computing UMAP for {target}...")
@@ -47,9 +62,39 @@ def compute_and_cache_umap(target):
     names_list = active_df["Name"].tolist()
     
     try:
-        import chemplot as cp
-        plotter = cp.Plotter.from_smiles(smiles_list)
-        umap_df = plotter.umap()
+        # Generate Morgan fingerprints for all molecules
+        print(f"Generating molecular fingerprints for {target}...")
+        fingerprints = []
+        valid_indices = []
+        
+        for idx, smiles in enumerate(smiles_list):
+            fp = smiles_to_fingerprint(smiles)
+            if fp is not None:
+                fingerprints.append(fp)
+                valid_indices.append(idx)
+        
+        if len(fingerprints) < 3:
+            print(f"Not enough valid molecules for {target}")
+            return None
+        
+        # Filter to only valid molecules
+        smiles_list = [smiles_list[i] for i in valid_indices]
+        names_list = [names_list[i] for i in valid_indices]
+        
+        # Convert to numpy array
+        fingerprints = np.array(fingerprints)
+        
+        # Compute UMAP embedding
+        print(f"Computing UMAP embedding for {target}...")
+        n_neighbors = min(15, len(fingerprints) - 1)
+        reducer = umap.UMAP(
+            n_neighbors=n_neighbors,
+            min_dist=0.1,
+            n_components=2,
+            random_state=42,
+            metric='jaccard'
+        )
+        embedding = reducer.fit_transform(fingerprints)
         
         # Generate base64 images for each molecule
         print(f"Generating molecule images for {target}...")
@@ -57,8 +102,8 @@ def compute_and_cache_umap(target):
         
         # Extract coordinates as lists
         cache_data = {
-            'umap_x': umap_df['UMAP-1'].tolist(),
-            'umap_y': umap_df['UMAP-2'].tolist(),
+            'umap_x': embedding[:, 0].tolist(),
+            'umap_y': embedding[:, 1].tolist(),
             'names': names_list,
             'smiles': smiles_list,
             'images': images_list
@@ -74,6 +119,8 @@ def compute_and_cache_umap(target):
         
     except Exception as e:
         print(f"✗ Error computing UMAP for {target}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def load_cached_umap(target):
@@ -195,78 +242,79 @@ def umap_plot():
         if cache_data is None:
             return jsonify({"error": f"No UMAP data available for {target}. Not enough active molecules (need at least 3)."}), 400
         
-        # Import Bokeh libraries
-        from bokeh.plotting import figure
-        from bokeh.models import HoverTool, ColumnDataSource
-        from bokeh.embed import components
+        # Create hover text with molecule information
+        hover_texts = []
+        for i in range(len(cache_data['names'])):
+            hover_text = (
+                f"<b>{cache_data['names'][i]}</b><br>"
+                f"UMAP-1: {cache_data['umap_x'][i]:.2f}<br>"
+                f"UMAP-2: {cache_data['umap_y'][i]:.2f}<br>"
+                f"SMILES: {cache_data['smiles'][i]}<br>"
+                f"<extra></extra>"  # Removes the secondary box in plotly
+            )
+            hover_texts.append(hover_text)
         
-        # Create ColumnDataSource with all data including images
-        source = ColumnDataSource(data={
-            'x': cache_data['umap_x'],
-            'y': cache_data['umap_y'],
-            'name': cache_data['names'],
-            'smiles': cache_data['smiles'],
-            'image': cache_data['images']
-        })
+        # Create plotly figure
+        fig = go.Figure()
         
-        # Create figure
-        p = figure(
+        # Add scatter trace with custom data for images
+        fig.add_trace(go.Scatter(
+            x=cache_data['umap_x'],
+            y=cache_data['umap_y'],
+            mode='markers',
+            marker=dict(
+                size=10,
+                color='#2196F3',
+                opacity=0.7,
+                line=dict(width=1, color='white')
+            ),
+            text=hover_texts,
+            hovertemplate='%{text}',
+            customdata=[[img, name, smiles] for img, name, smiles in 
+                       zip(cache_data['images'], cache_data['names'], cache_data['smiles'])],
+            name=''
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=f"UMAP Visualization of Active Molecules for {target} ({len(cache_data['names'])} molecules)",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16)
+            ),
+            xaxis=dict(
+                title="UMAP-1",
+                showgrid=True,
+                gridcolor='#e0e0e0',
+                zeroline=False
+            ),
+            yaxis=dict(
+                title="UMAP-2",
+                showgrid=True,
+                gridcolor='#e0e0e0',
+                zeroline=False
+            ),
+            plot_bgcolor='#f8f9fa',
+            paper_bgcolor='white',
             width=900,
             height=600,
-            title=f"UMAP Visualization of Active Molecules for {target} ({len(cache_data['names'])} molecules)",
-            x_axis_label="UMAP-1",
-            y_axis_label="UMAP-2",
-            tools="pan,wheel_zoom,box_zoom,reset,save",
-            sizing_mode="scale_width"
+            hovermode='closest',
+            showlegend=False
         )
         
-        # Add scatter points
-        p.circle(
-            'x', 'y',
-            source=source,
-            size=10,
-            color='#2196F3',
-            alpha=0.7,
-            line_color='white',
-            line_width=1
-        )
-        
-        # Configure hover tool with molecule image
-        hover = HoverTool(tooltips="""
-            <div style="width: 250px;">
-                <div style="font-weight: bold; font-size: 14px; margin-bottom: 5px;">
-                    @name
-                </div>
-                <div style="margin-bottom: 5px;">
-                    <strong>UMAP-1:</strong> @x{0.00}<br>
-                    <strong>UMAP-2:</strong> @y{0.00}
-                </div>
-                <div style="border: 2px solid #2196F3; padding: 5px; background-color: white;">
-                    <img src="@image" width="200" style="display: block; margin: 0 auto;">
-                </div>
-                <div style="font-size: 10px; color: #666; margin-top: 5px; font-family: monospace;">
-                    @smiles
-                </div>
-            </div>
-        """)
-        p.add_tools(hover)
-        
-        # Style the plot
-        p.background_fill_color = "#f8f9fa"
-        p.border_fill_color = "white"
-        p.title.text_font_size = "14pt"
-        p.title.align = "center"
-        
-        # Get components (script and div) for embedding
-        script, div = components(p)
-        
-        # Return as JSON with script and div
+        # Return plot data as JSON instead of HTML string
+        # This avoids script execution issues when injecting HTML
         return jsonify({
-            'script': script,
-            'div': div
+            "plot_data": json.loads(fig.to_json()),
+            "images": cache_data['images'],
+            "names": cache_data['names'],
+            "smiles": cache_data['smiles']
         })
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": f"Error generating UMAP plot: {str(e)}"}), 500
 
 
