@@ -28,9 +28,10 @@
             .plot-area {
                 flex: 1;
                 min-width: 600px;
+                /* width: 600px; */
             }
             .info-panel {
-                width: 300px;
+                width: 420px;
                 background: #f8f9fa;
                 border: 1px solid #ddd;
                 border-radius: 8px;
@@ -136,12 +137,15 @@
         </div>
         {% endif %}
         
+        <h2>Evaluate RNAmigo2</h2>
+        <p>A structure-based deep learning virtual screening pipeline for RNA targets</p>
         
         <h2>Analyze Active Hits</h2>
         <p>Number of active molecules: {{ num_hits }}</p>
         <div style="background-color: #f0f0f0; padding: 1em; margin: 1em 0; font-family: monospace; max-height: 300px; overflow-y: auto; border: 1px solid #ccc;">
             {{ examples|safe }}
         </div>
+        
         
         <h3>Chemical Space Visualization (UMAP)</h3>
         <p style="color: #666; font-size: 14px; margin: 10px 0;">
