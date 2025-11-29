@@ -5,12 +5,13 @@ import json
 import os
 from pathlib import Path
 from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
+from rdkit.Chem import Draw, AllChem, QED, Descriptors
 import base64
 from io import BytesIO
 import numpy as np
 import umap
 import plotly.graph_objects as go
+from sklearn.cluster import KMeans
 
 app = Flask(__name__)
 
@@ -20,6 +21,9 @@ df = pd.read_csv("robin_clean.csv")
 # Cache directory for UMAP embeddings
 CACHE_DIR = Path("umap_cache")
 CACHE_DIR.mkdir(exist_ok=True)
+
+# Cache file for molecular properties (QED and SA scores)
+PROPERTIES_CACHE_FILE = CACHE_DIR / "molecular_properties.json"
 
 def smiles_to_image_base64(smiles, size=(200, 200)):
     """Convert SMILES to base64-encoded PNG image for hover display."""
@@ -42,7 +46,9 @@ def smiles_to_fingerprint(smiles, radius=2, nBits=2048):
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nBits)
+        # Use MorganGenerator (new API) instead of deprecated GetMorganFingerprintAsBitVect
+        generator = AllChem.GetMorganGenerator(radius=radius, fpSize=nBits)
+        fp = generator.GetFingerprint(mol)
         return np.array(fp)
     except Exception as e:
         print(f"Error generating fingerprint for SMILES {smiles}: {e}")
@@ -131,6 +137,57 @@ def load_cached_umap(target):
             return json.load(f)
     return None
 
+def compute_molecular_properties():
+    """Compute QED and SA scores for all molecules and cache them."""
+    print("Computing molecular properties (QED and SA scores)...")
+    
+    all_smiles = df["Smile"].tolist()
+    properties = {
+        'qed': [],
+        'sa': [],
+        'smiles': []
+    }
+    
+    for idx, smiles in enumerate(all_smiles):
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                # Calculate QED
+                qed_value = QED.qed(mol)
+                
+                # Calculate SA Score approximation
+                num_rings = Descriptors.RingCount(mol)
+                num_heteroatoms = Descriptors.NumHeteroatoms(mol)
+                num_rotatable_bonds = Descriptors.NumRotatableBonds(mol)
+                mol_weight = Descriptors.MolWt(mol)
+                
+                sa_score = 1 + (num_rings * 0.5) + (num_heteroatoms * 0.3) + (num_rotatable_bonds * 0.2) + (mol_weight / 100)
+                sa_score = min(10, max(1, sa_score))
+                
+                properties['qed'].append(qed_value)
+                properties['sa'].append(sa_score)
+                properties['smiles'].append(smiles)
+        except Exception as e:
+            print(f"Error processing SMILES {smiles}: {e}")
+            continue
+        
+        if (idx + 1) % 100 == 0:
+            print(f"  Processed {idx + 1}/{len(all_smiles)} molecules...")
+    
+    # Save to cache
+    with open(PROPERTIES_CACHE_FILE, 'w') as f:
+        json.dump(properties, f)
+    
+    print(f"✓ Cached molecular properties for {len(properties['qed'])} molecules")
+    return properties
+
+def load_cached_properties():
+    """Load cached molecular properties."""
+    if PROPERTIES_CACHE_FILE.exists():
+        with open(PROPERTIES_CACHE_FILE, 'r') as f:
+            return json.load(f)
+    return None
+
 # Pre-compute UMAP embeddings for all targets on startup
 def initialize_umap_cache():
     """Pre-compute and cache UMAP embeddings for all targets."""
@@ -147,7 +204,21 @@ def initialize_umap_cache():
             print(f"✓ Using cached UMAP for {target} ({len(cache_data['names'])} molecules)")
     
     print("="*50)
-    print("UMAP cache initialization complete!\n")
+    print("UMAP cache initialization complete!")
+    
+    # Also initialize molecular properties cache
+    print("="*50)
+    print("Initializing molecular properties cache...")
+    print("="*50)
+    
+    properties = load_cached_properties()
+    if properties is None:
+        compute_molecular_properties()
+    else:
+        print(f"✓ Using cached molecular properties ({len(properties['qed'])} molecules)")
+    
+    print("="*50)
+    print("Cache initialization complete!\n")
 
 # Initialize cache on startup
 # Run this in a separate thread to not block server startup
@@ -243,6 +314,31 @@ def umap_plot():
         if cache_data is None:
             return jsonify({"error": f"No UMAP data available for {target}. Not enough active molecules (need at least 3)."}), 400
         
+        # Load cached molecular properties
+        properties = load_cached_properties()
+        if properties is None:
+            return jsonify({"error": "Molecular properties not cached. Please restart the server."}), 500
+        
+        # Create a mapping from SMILES to properties
+        smiles_to_props = {
+            smiles: {'qed': qed, 'sa': sa}
+            for smiles, qed, sa in zip(properties['smiles'], properties['qed'], properties['sa'])
+        }
+        
+        # Add QED and SA scores to cache_data
+        qed_values = []
+        sa_values = []
+        for smiles in cache_data['smiles']:
+            if smiles in smiles_to_props:
+                qed_values.append(smiles_to_props[smiles]['qed'])
+                sa_values.append(smiles_to_props[smiles]['sa'])
+            else:
+                qed_values.append(None)
+                sa_values.append(None)
+        
+        cache_data['qed'] = qed_values
+        cache_data['sa'] = sa_values
+        
         # Create hover text with molecule information
         hover_texts = []
         for i in range(len(cache_data['names'])):
@@ -310,13 +406,137 @@ def umap_plot():
             "plot_data": json.loads(fig.to_json()),
             "images": cache_data['images'],
             "names": cache_data['names'],
-            "smiles": cache_data['smiles']
+            "smiles": cache_data['smiles'],
+            "qed": cache_data['qed'],
+            "sa": cache_data['sa']
         })
         
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": f"Error generating UMAP plot: {str(e)}"}), 500
+
+
+@app.route("/kmeans_cluster", methods=["POST"])
+def kmeans_cluster():
+    """Perform k-means clustering on ECFP fingerprints of active molecules."""
+    try:
+        target = request.form["target"]
+        
+        # Validate target
+        valid_targets = ["TPP", "Glutamine_RS", "ZTP", "SAM_ll", "PreQ1"]
+        if target not in valid_targets:
+            return jsonify({"error": f"Invalid target: {target}"}), 400
+        
+        # Parse and validate n_clusters
+        try:
+            n_clusters = int(request.form["n_clusters"])
+        except (ValueError, KeyError):
+            return jsonify({"error": "Number of clusters must be a valid integer"}), 400
+        
+        # Validate n_clusters range
+        if n_clusters < 2:
+            return jsonify({"error": "Number of clusters must be at least 2"}), 400
+        
+        if n_clusters > 50:
+            return jsonify({"error": "Number of clusters cannot exceed 50"}), 400
+        
+        # Load cached UMAP data to get the molecule order
+        cache_data = load_cached_umap(target)
+        
+        if cache_data is None:
+            return jsonify({"error": f"No UMAP data available for {target}"}), 400
+        
+        # Get the SMILES in the same order as the cached UMAP data
+        smiles_list = cache_data['smiles']
+        
+        # Check if we have enough molecules for clustering
+        if len(smiles_list) < n_clusters:
+            return jsonify({"error": f"Not enough molecules ({len(smiles_list)}) for {n_clusters} clusters"}), 400
+        
+        # Generate ECFP fingerprints for all molecules
+        fingerprints = []
+        valid_indices = []
+        
+        for idx, smiles in enumerate(smiles_list):
+            fp = smiles_to_fingerprint(smiles)
+            if fp is not None:
+                fingerprints.append(fp)
+                valid_indices.append(idx)
+        
+        if len(fingerprints) < n_clusters:
+            return jsonify({"error": f"Not enough valid fingerprints ({len(fingerprints)}) for {n_clusters} clusters"}), 400
+        
+        # Convert to numpy array
+        fingerprints = np.array(fingerprints)
+        
+        # Perform k-means clustering
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(fingerprints)
+        
+        # Convert cluster labels to list (they should match the order of UMAP data)
+        cluster_labels_list = cluster_labels.tolist()
+        
+        return jsonify({
+            "cluster_labels": cluster_labels_list,
+            "n_clusters": n_clusters,
+            "n_molecules": len(cluster_labels_list)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Error performing k-means clustering: {str(e)}"}), 500
+
+
+@app.route("/density_plots", methods=["POST"])
+def density_plots():
+    """Get QED and SA Score distributions for all molecules and positive hits from cache."""
+    try:
+        target = request.form["target"]
+        
+        # Validate target
+        valid_targets = ["TPP", "Glutamine_RS", "ZTP", "SAM_ll", "PreQ1"]
+        if target not in valid_targets:
+            return jsonify({"error": f"Invalid target: {target}"}), 400
+        
+        # Load cached properties
+        properties = load_cached_properties()
+        if properties is None:
+            return jsonify({"error": "Molecular properties not cached. Please restart the server."}), 500
+        
+        # Create a mapping from SMILES to properties for quick lookup
+        smiles_to_props = {
+            smiles: {'qed': qed, 'sa': sa}
+            for smiles, qed, sa in zip(properties['smiles'], properties['qed'], properties['sa'])
+        }
+        
+        # Get positive hits for this target
+        positive_hits_df = df[df[target] == 1]
+        positive_hits_smiles = positive_hits_df["Smile"].tolist()
+        
+        # Extract properties for positive hits
+        qed_hits = []
+        sa_hits = []
+        
+        for smiles in positive_hits_smiles:
+            if smiles in smiles_to_props:
+                qed_hits.append(smiles_to_props[smiles]['qed'])
+                sa_hits.append(smiles_to_props[smiles]['sa'])
+        
+        return jsonify({
+            "qed_all": properties['qed'],
+            "qed_hits": qed_hits,
+            "sa_all": properties['sa'],
+            "sa_hits": sa_hits,
+            "n_all": len(properties['qed']),
+            "n_hits": len(qed_hits)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Error loading density plots: {str(e)}"}), 500
 
 
 if __name__ == "__main__":

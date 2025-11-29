@@ -5,4 +5,6 @@ rdkit
 pillow
 umap-learn
 plotly
+scikit-learn
+scipy
 
