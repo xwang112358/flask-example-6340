@@ -157,16 +157,57 @@
                 padding: 10px 15px;
                 border-radius: 12px;
                 word-wrap: break-word;
-                white-space: pre-wrap;
             }
             .chat-message.user .message-bubble {
                 background: #2196F3;
                 color: white;
+                white-space: pre-wrap;
             }
             .chat-message.assistant .message-bubble {
                 background: white;
                 border: 1px solid #ddd;
                 color: #333;
+                white-space: normal;
+            }
+            .message-bubble h1,
+            .message-bubble h2,
+            .message-bubble h3,
+            .message-bubble h4,
+            .message-bubble h5,
+            .message-bubble h6 {
+                margin: 12px 0 8px 0;
+                font-weight: bold;
+                color: #2196F3;
+                line-height: 1.3;
+            }
+            .message-bubble h1 { font-size: 1.5em; }
+            .message-bubble h2 { font-size: 1.3em; }
+            .message-bubble h3 { font-size: 1.15em; }
+            .message-bubble h4 { font-size: 1.05em; }
+            .message-bubble h5 { font-size: 1em; }
+            .message-bubble h6 { font-size: 0.95em; }
+            .message-bubble h1:first-child,
+            .message-bubble h2:first-child,
+            .message-bubble h3:first-child,
+            .message-bubble h4:first-child,
+            .message-bubble h5:first-child,
+            .message-bubble h6:first-child {
+                margin-top: 0;
+            }
+            .message-bubble ul {
+                margin: 8px 0;
+                padding-left: 20px;
+                list-style-type: disc;
+            }
+            .message-bubble li {
+                margin: 4px 0;
+                line-height: 1.4;
+            }
+            .message-bubble ul:first-child {
+                margin-top: 0;
+            }
+            .message-bubble ul:last-child {
+                margin-bottom: 0;
             }
             .message-label {
                 font-size: 11px;
@@ -252,7 +293,7 @@
     <body>
         <h1>Analysis Results</h1>
 
-        <h2>RNA Target Information</h2>
+        <h2>Understanding the RNA Target</h2>
         
         <div style="background-color: #e8f4f8; padding: 1em; margin: 1em 0; border-left: 4px solid #2196F3; max-width: 1440px; margin-left: auto; margin-right: auto;">
             <strong>RNA Target:</strong> {{ target }}<br>
@@ -271,7 +312,7 @@
                     {% if chat_intro %}
                     <div class="chat-message assistant">
                         <div class="message-label">Assistant</div>
-                        <div class="message-bubble">{{ chat_intro }}</div>
+                        <div class="message-bubble" id="initial-message">{{ chat_intro }}</div>
                     </div>
                     {% else %}
                     <div class="chat-loading">Loading assistant...</div>
@@ -1006,6 +1047,96 @@
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
             
+            // Convert markdown to HTML (support for headers, bold, italic, lists, and line breaks)
+            function markdownToHtml(text) {
+                // First escape HTML to prevent XSS
+                const escapeHtml = (str) => {
+                    const div = document.createElement('div');
+                    div.textContent = str;
+                    return div.innerHTML;
+                };
+                
+                let html = escapeHtml(text);
+                
+                // Split into lines to process headers and lists (which are line-based)
+                const lines = html.split('\n');
+                const processedLines = [];
+                let inList = false;
+                let listItems = [];
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    
+                    // Check for markdown headers (# Header)
+                    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+                    if (headerMatch) {
+                        // Close any open list before header
+                        if (inList) {
+                            processedLines.push('<ul>' + listItems.join('') + '</ul>');
+                            listItems = [];
+                            inList = false;
+                        }
+                        const level = headerMatch[1].length;
+                        const headerText = headerMatch[2].trim();
+                        processedLines.push(`<h${level}>${headerText}</h${level}>`);
+                        continue;
+                    }
+                    
+                    // Check for bullet points (- or * followed by space)
+                    const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+                    if (bulletMatch) {
+                        let itemText = bulletMatch[1].trim();
+                        // Process markdown inside list items (bold, italic)
+                        itemText = itemText.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                        itemText = itemText.replace(/\*([^*\n<>]+?)\*/g, '<em>$1</em>');
+                        listItems.push('<li>' + itemText + '</li>');
+                        inList = true;
+                        continue;
+                    }
+                    
+                    // Not a bullet point - close list if we were in one
+                    if (inList) {
+                        processedLines.push('<ul>' + listItems.join('') + '</ul>');
+                        listItems = [];
+                        inList = false;
+                    }
+                    
+                    // Regular line
+                    processedLines.push(line);
+                }
+                
+                // Close any remaining open list
+                if (inList) {
+                    processedLines.push('<ul>' + listItems.join('') + '</ul>');
+                }
+                
+                html = processedLines.join('\n');
+                
+                // Convert **bold** to <strong>bold</strong>
+                // Process bold first to avoid conflicts with italic
+                html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                
+                // Convert *italic* to <em>italic</em>
+                // Process italic after bold - any remaining single asterisks are italic
+                // Match *text* where text doesn't contain asterisks
+                html = html.replace(/\*([^*\n<>]+?)\*/g, '<em>$1</em>');
+                
+                // Convert line breaks to <br> (but not inside lists or headers)
+                // We'll replace \n with <br> but need to be careful about lists
+                // Simple approach: replace \n with <br>, then clean up list formatting
+                html = html.replace(/\n/g, '<br>');
+                // Remove <br> tags that appear right after </li> or before <li>
+                html = html.replace(/<\/li><br>/g, '</li>');
+                html = html.replace(/<br><li>/g, '<li>');
+                // Remove <br> tags inside <ul> tags
+                html = html.replace(/<ul><br>/g, '<ul>');
+                html = html.replace(/<br><\/ul>/g, '</ul>');
+                // Remove <br> tags right after </h> tags
+                html = html.replace(/<\/h[1-6]><br>/g, (match) => match.replace('<br>', ''));
+                
+                return html;
+            }
+            
             // Add message to chat UI
             function addMessage(role, content) {
                 const messageDiv = document.createElement('div');
@@ -1017,7 +1148,13 @@
                 
                 const bubble = document.createElement('div');
                 bubble.className = 'message-bubble';
-                bubble.textContent = content;
+                
+                // For assistant messages, render markdown; for user messages, use plain text
+                if (role === 'assistant') {
+                    bubble.innerHTML = markdownToHtml(content);
+                } else {
+                    bubble.textContent = content;
+                }
                 
                 messageDiv.appendChild(label);
                 messageDiv.appendChild(bubble);
@@ -1130,7 +1267,16 @@
                 }
             });
             
-            // Initial scroll
+            // Render markdown in initial message if it exists
+            function renderInitialMessage() {
+                const initialMessage = document.getElementById('initial-message');
+                if (initialMessage) {
+                    initialMessage.innerHTML = markdownToHtml(initialMessage.textContent);
+                }
+            }
+            
+            // Initialize: render initial message and scroll to bottom
+            renderInitialMessage();
             scrollChatToBottom();
         </script>
         

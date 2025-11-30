@@ -274,7 +274,7 @@ def call_azure_openai(
             model=deployment,
             messages=messages,
             temperature=0.7,
-            max_tokens=500,  # ~150-200 words
+            max_tokens=1000,  # ~150-200 words
             top_p=1.0
         )
         
