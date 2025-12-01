@@ -331,15 +331,82 @@
         </div>
         {% endif %}
         
-        <h2>Evaluate RNAmigo2</h2>
-        <p>A structure-based deep learning virtual screening pipeline for RNA targets</p>
+        <!-- <h2>Evaluate RNAmigo2</h2>
+        <p>A structure-based deep learning virtual screening pipeline for RNA targets</p> -->
         
         <h2>Analyze Active Hits</h2>
-        <p>Number of active molecules: {{ num_hits }}</p>
-        <div style="background-color: #f0f0f0; padding: 1em; margin: 1em 0; font-family: monospace; max-height: 300px; overflow-y: auto; border: 1px solid #ccc;">
+        <p style="font-size: 20px; font-weight: bold; margin: 15px 0;">Number of active molecules: <span id="active-count">{{ num_hits }}</span></p>
+        
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; border: 1px solid #ddd;">
+            <h4 style="margin: 0 0 10px 0; color: #333; font-size: 16px;">Filter by QED and SA Scores</h4>
+            <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center;">
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <label for="qed-min" style="font-weight: bold; color: #333; font-size: 14px; min-width: 70px;">QED Min:</label>
+                    <input 
+                        type="number" 
+                        id="qed-min" 
+                        step="0.001" 
+                        min="0" 
+                        max="1"
+                        style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px; font-size: 14px; width: 100px; transition: border-color 0.3s;"
+                    />
+                </div>
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <label for="qed-max" style="font-weight: bold; color: #333; font-size: 14px; min-width: 70px;">QED Max:</label>
+                    <input 
+                        type="number" 
+                        id="qed-max" 
+                        step="0.001" 
+                        min="0" 
+                        max="1"
+                        style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px; font-size: 14px; width: 100px; transition: border-color 0.3s;"
+                    />
+                </div>
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <label for="sa-min" style="font-weight: bold; color: #333; font-size: 14px; min-width: 70px;">SA Min:</label>
+                    <input 
+                        type="number" 
+                        id="sa-min" 
+                        step="0.1" 
+                        min="1" 
+                        max="10"
+                        style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px; font-size: 14px; width: 100px; transition: border-color 0.3s;"
+                    />
+                </div>
+                <div style="display: flex; gap: 5px; align-items: center;">
+                    <label for="sa-max" style="font-weight: bold; color: #333; font-size: 14px; min-width: 70px;">SA Max:</label>
+                    <input 
+                        type="number" 
+                        id="sa-max" 
+                        step="0.1" 
+                        min="1" 
+                        max="10"
+                        style="padding: 8px 12px; border: 2px solid #ddd; border-radius: 5px; font-size: 14px; width: 100px; transition: border-color 0.3s;"
+                    />
+                </div>
+            </div>
+        </div>
+        
+        <div id="active-molecules-list" style="background-color: #f0f0f0; padding: 1em; margin: 1em 0; font-family: monospace; max-height: 300px; overflow-y: auto; border: 1px solid #ccc;">
             {{ examples|safe }}
         </div>
         
+        <h3 style="margin-top: 50px;">Molecular Property Distributions</h3>
+        <p style="color: #666; font-size: 14px; margin: 10px 0;">
+            <strong>Property Analysis:</strong> Compare the distribution of drug-likeness (QED) and synthetic accessibility (SA Score) between all molecules in the dataset and the positive hits for {{ target }}.
+        </p>
+        
+        <div id="density-loading" class="loading">Loading property distributions...</div>
+        <div id="density-error" class="error" style="display: none;"></div>
+        
+        <div style="display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 400px;">
+                <div id="density-qed" style="width: 100%; height: 500px;"></div>
+            </div>
+            <div style="flex: 1; min-width: 400px;">
+                <div id="density-sa" style="width: 100%; height: 500px;"></div>
+            </div>
+        </div>
         
         <h3>Chemical Space Visualization (UMAP)</h3>
         <p style="color: #666; font-size: 14px; margin: 10px 0;">
@@ -409,23 +476,6 @@
             </div>
         </div>
         
-        <h3 style="margin-top: 50px;">Molecular Property Distributions</h3>
-        <p style="color: #666; font-size: 14px; margin: 10px 0;">
-            <strong>Property Analysis:</strong> Compare the distribution of drug-likeness (QED) and synthetic accessibility (SA Score) between all molecules in the dataset and the positive hits for {{ target }}.
-        </p>
-        
-        <div id="density-loading" class="loading">Loading property distributions...</div>
-        <div id="density-error" class="error" style="display: none;"></div>
-        
-        <div style="display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 400px;">
-                <div id="density-qed" style="width: 100%; height: 500px;"></div>
-            </div>
-            <div style="flex: 1; min-width: 400px;">
-                <div id="density-sa" style="width: 100%; height: 500px;"></div>
-            </div>
-        </div>
-        
         <script>
             let moleculeData = null;
             let originalPlotData = null;
@@ -441,6 +491,103 @@
             const molSmiles = document.getElementById('mol-smiles');
             const molQed = document.getElementById('mol-qed');
             const molSa = document.getElementById('mol-sa');
+            
+            // Active molecules filtering
+            let activeMoleculesData = null;
+            const activeMoleculesList = document.getElementById('active-molecules-list');
+            const activeCountSpan = document.getElementById('active-count');
+            const qedMinInput = document.getElementById('qed-min');
+            const qedMaxInput = document.getElementById('qed-max');
+            const saMinInput = document.getElementById('sa-min');
+            const saMaxInput = document.getElementById('sa-max');
+            
+            // Fetch active molecules data and initialize filters
+            function initializeActiveMoleculesFilter() {
+                fetch('/active_molecules_data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'target={{ target }}'
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error || 'Failed to load active molecules data');
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    activeMoleculesData = data.molecules;
+                    
+                    // Initialize input fields with min/max values
+                    qedMinInput.value = data.qed_min.toFixed(3);
+                    qedMaxInput.value = data.qed_max.toFixed(3);
+                    qedMinInput.min = data.qed_min.toFixed(3);
+                    qedMaxInput.max = data.qed_max.toFixed(3);
+                    
+                    saMinInput.value = data.sa_min.toFixed(1);
+                    saMaxInput.value = data.sa_max.toFixed(1);
+                    saMinInput.min = data.sa_min.toFixed(1);
+                    saMaxInput.max = data.sa_max.toFixed(1);
+                    
+                    // Initial filter to show all molecules
+                    filterMolecules();
+                })
+                .catch(error => {
+                    console.error('Error loading active molecules data:', error);
+                    activeMoleculesList.innerHTML = `<div style="color: #d32f2f;">Error loading molecule data: ${error.message}</div>`;
+                });
+            }
+            
+            // Filter molecules based on QED and SA score ranges
+            function filterMolecules() {
+                if (!activeMoleculesData) {
+                    return;
+                }
+                
+                // Get filter values
+                const qedMin = parseFloat(qedMinInput.value) || 0;
+                const qedMax = parseFloat(qedMaxInput.value) || 1;
+                const saMin = parseFloat(saMinInput.value) || 1;
+                const saMax = parseFloat(saMaxInput.value) || 10;
+                
+                // Validate ranges
+                if (qedMin > qedMax) {
+                    activeMoleculesList.innerHTML = '<div style="color: #d32f2f;">Error: QED Min cannot be greater than QED Max</div>';
+                    return;
+                }
+                
+                if (saMin > saMax) {
+                    activeMoleculesList.innerHTML = '<div style="color: #d32f2f;">Error: SA Min cannot be greater than SA Max</div>';
+                    return;
+                }
+                
+                // Filter molecules
+                const filtered = activeMoleculesData.filter(mol => {
+                    const qed = mol.qed;
+                    const sa = mol.sa;
+                    return qed >= qedMin && qed <= qedMax && sa >= saMin && sa <= saMax;
+                });
+                
+                // Update count
+                activeCountSpan.textContent = filtered.length;
+                
+                // Update display
+                if (filtered.length === 0) {
+                    activeMoleculesList.innerHTML = '<div style="color: #666; font-style: italic;">No molecules match the selected filters.</div>';
+                } else {
+                    activeMoleculesList.innerHTML = filtered.map(mol => mol.smiles).join('<br>');
+                }
+            }
+            
+            // Add event listeners to input fields
+            qedMinInput.addEventListener('input', filterMolecules);
+            qedMaxInput.addEventListener('input', filterMolecules);
+            saMinInput.addEventListener('input', filterMolecules);
+            saMaxInput.addEventListener('input', filterMolecules);
+            
+            // Initialize on page load
+            initializeActiveMoleculesFilter();
             
             // Fetch UMAP plot components (Plotly)
             fetch('/umap_plot', {

@@ -579,6 +579,70 @@ def density_plots():
         return jsonify({"error": f"Error loading density plots: {str(e)}"}), 500
 
 
+@app.route("/active_molecules_data", methods=["POST"])
+def active_molecules_data():
+    """Get active molecules with QED and SA scores, plus min/max ranges for filtering."""
+    try:
+        target = request.form["target"]
+        
+        # Validate target
+        valid_targets = ["TPP", "Glutamine_RS", "ZTP", "SAM_ll", "PreQ1"]
+        if target not in valid_targets:
+            return jsonify({"error": f"Invalid target: {target}"}), 400
+        
+        # Load cached properties
+        properties = load_cached_properties()
+        if properties is None:
+            return jsonify({"error": "Molecular properties not cached. Please restart the server."}), 500
+        
+        # Create a mapping from SMILES to properties for quick lookup
+        smiles_to_props = {
+            smiles: {'qed': qed, 'sa': sa}
+            for smiles, qed, sa in zip(properties['smiles'], properties['qed'], properties['sa'])
+        }
+        
+        # Get positive hits for this target
+        positive_hits_df = df[df[target] == 1]
+        positive_hits_smiles = positive_hits_df["Smile"].tolist()
+        
+        # Extract properties for positive hits
+        molecules = []
+        qed_values = []
+        sa_values = []
+        
+        for smiles in positive_hits_smiles:
+            if smiles in smiles_to_props:
+                qed_val = smiles_to_props[smiles]['qed']
+                sa_val = smiles_to_props[smiles]['sa']
+                molecules.append({
+                    'smiles': smiles,
+                    'qed': qed_val,
+                    'sa': sa_val
+                })
+                qed_values.append(qed_val)
+                sa_values.append(sa_val)
+        
+        # Calculate min/max ranges
+        qed_min = min(qed_values) if qed_values else 0
+        qed_max = max(qed_values) if qed_values else 1
+        sa_min = min(sa_values) if sa_values else 1
+        sa_max = max(sa_values) if sa_values else 10
+        
+        return jsonify({
+            "molecules": molecules,
+            "qed_min": qed_min,
+            "qed_max": qed_max,
+            "sa_min": sa_min,
+            "sa_max": sa_max,
+            "total_count": len(molecules)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Error loading active molecules data: {str(e)}"}), 500
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     """Handle chat messages and return AI responses."""
